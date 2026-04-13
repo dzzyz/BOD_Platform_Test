@@ -136,11 +136,12 @@ def ensure_dirs():
         d.mkdir(parents=True, exist_ok=True)
 
 
-def save_metadata(title_ko, title_en, num_pages):
+def save_metadata(title_ko, title_en, num_pages, aspect_ratio=0.5625):
     meta = {
         "title_ko": title_ko,
         "title_en": title_en,
         "num_pages": num_pages,
+        "aspect_ratio": aspect_ratio,
         "updated_at": datetime.now().isoformat(),
     }
     META_FILE.write_text(json.dumps(meta, ensure_ascii=False, indent=2))
@@ -162,14 +163,19 @@ def has_data():
 # PDF → Images
 # ──────────────────────────────────────────────
 def pdf_to_images(file_bytes, output_dir, make_thumbs=False):
-    """Convert PDF pages to JPEG images. Returns page count."""
+    """Convert PDF pages to JPEG images. Returns (page_count, aspect_ratio)."""
     from PIL import Image
 
     doc = fitz.open(stream=file_bytes, filetype="pdf")
     num = len(doc)
+    aspect = 0.5625  # default 16:9
 
     for i in range(num):
         page = doc[i]
+
+        # Capture aspect ratio from first page
+        if i == 0:
+            aspect = page.rect.height / page.rect.width
 
         # High-res slide image
         pix = page.get_pixmap(
@@ -191,7 +197,7 @@ def pdf_to_images(file_bytes, output_dir, make_thumbs=False):
             (SLIDES_THUMB / f"page_{i+1:03d}.jpg").write_bytes(tbuf.getvalue())
 
     doc.close()
-    return num
+    return num, aspect
 
 
 def get_slide_b64(lang, page_num):
@@ -227,8 +233,12 @@ def render_slide(page_num, lang):
              style="width:100%; display:block;" />
     </div>"""
 
-    # Estimate height from first slide aspect ratio (default 16:9)
-    st.components.v1.html(html, height=580, scrolling=False)
+    # Dynamic height from actual slide aspect ratio
+    meta = load_metadata()
+    aspect = meta.get("aspect_ratio", 0.5625) if meta else 0.5625
+    # Content area is ~900px wide, calculate proportional height + padding
+    height = int(900 * aspect) + 16
+    st.components.v1.html(html, height=height, scrolling=False)
 
 
 def render_viewer():
@@ -378,12 +388,12 @@ def render_admin():
 
             # Process Korean PDF (with thumbnails)
             ko_bytes = pdf_ko.read()
-            num_ko = pdf_to_images(ko_bytes, SLIDES_KO, make_thumbs=True)
+            num_ko, aspect = pdf_to_images(ko_bytes, SLIDES_KO, make_thumbs=True)
             progress.progress(50, text="영문 PDF 처리 중...")
 
             # Process English PDF
             en_bytes = pdf_en.read()
-            num_en = pdf_to_images(en_bytes, SLIDES_EN, make_thumbs=False)
+            num_en, _ = pdf_to_images(en_bytes, SLIDES_EN, make_thumbs=False)
             progress.progress(100, text="완료!")
             progress.empty()
 
@@ -394,7 +404,7 @@ def render_admin():
                 return
 
             # Save metadata
-            save_metadata(pdf_ko.name, pdf_en.name, num_ko)
+            save_metadata(pdf_ko.name, pdf_en.name, num_ko, aspect)
 
             # Reset viewer state
             st.session_state.current_page = 0
