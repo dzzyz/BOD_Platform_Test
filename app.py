@@ -1,13 +1,14 @@
 import streamlit as st
 import fitz  # PyMuPDF
-import anthropic
-import json
 import base64
-import html as html_lib
+import json
+import os
 import io
+from datetime import datetime
+from pathlib import Path
 
 # ──────────────────────────────────────────────
-# Page Config
+# Config
 # ──────────────────────────────────────────────
 st.set_page_config(
     page_title="BOD Slide Translator",
@@ -16,8 +17,20 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+DATA_DIR = Path("data")
+SLIDES_KO = DATA_DIR / "ko"
+SLIDES_EN = DATA_DIR / "en"
+SLIDES_THUMB = DATA_DIR / "thumbs"
+META_FILE = DATA_DIR / "metadata.json"
+
+RENDER_SCALE = 2.5
+THUMB_SCALE = 0.35
+JPEG_QUALITY = 90
+THUMB_QUALITY = 55
+
+
 # ──────────────────────────────────────────────
-# Custom CSS — Clean White Theme
+# CSS
 # ──────────────────────────────────────────────
 st.markdown("""
 <style>
@@ -41,55 +54,54 @@ section[data-testid="stSidebar"] {
     border-right: 1px solid #E8EBF0;
 }
 
-/* Upload */
-.upload-area {
-    display: flex; flex-direction: column;
-    align-items: center; justify-content: center;
-    padding: 80px 40px; text-align: center;
+/* Branding */
+.sb-brand {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.12em;
+    text-transform: uppercase; color: #4F46E5; margin-bottom: 2px;
 }
-.upload-area h1 {
-    font-size: 32px; font-weight: 700; color: #111827;
-    margin-bottom: 8px; letter-spacing: -0.02em;
+.sb-sub { font-size: 10px; color: #9CA3AF; margin-bottom: 14px; }
+.sb-label {
+    font-size: 10px; font-weight: 600; color: #9CA3AF;
+    text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 8px;
 }
-.upload-area .sub {
-    font-size: 15px; color: #6B7280; line-height: 1.7; margin-bottom: 32px;
+.sb-count { font-size: 11px; color: #6B7280; margin-bottom: 14px; }
+.sb-meta {
+    font-size: 10px; color: #9CA3AF; margin-top: 8px; line-height: 1.5;
 }
-.features {
-    display: grid; grid-template-columns: repeat(3, 1fr);
-    gap: 16px; margin-bottom: 40px; width: 100%; max-width: 620px;
-}
-.feat {
-    background: #F9FAFB; border: 1px solid #F0F1F3;
-    border-radius: 12px; padding: 20px 16px; text-align: left;
-    transition: border-color 0.2s, box-shadow 0.2s;
-}
-.feat:hover { border-color: #D1D5DB; box-shadow: 0 2px 8px rgba(0,0,0,0.04); }
-.feat .ic { font-size: 20px; margin-bottom: 8px; }
-.feat .tt { font-size: 13px; font-weight: 600; color: #111827; margin-bottom: 3px; }
-.feat .dd { font-size: 11px; color: #9CA3AF; line-height: 1.5; }
 
 /* Status */
 .status { font-size: 12px; font-weight: 500; }
 .status.done { color: #059669; }
 .status.info { color: #6B7280; }
 
-/* Sidebar */
-.sb-brand {
-    font-size: 10px; font-weight: 700; letter-spacing: 0.12em;
-    text-transform: uppercase; color: #4F46E5; margin-bottom: 2px;
+/* Welcome */
+.welcome {
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    padding: 100px 40px; text-align: center;
 }
-.sb-sub { font-size: 10px; color: #9CA3AF; margin-bottom: 14px; }
-.sb-file {
-    font-size: 11px; color: #374151; background: #fff;
-    border: 1px solid #E8EBF0; padding: 7px 10px;
-    border-radius: 6px; margin-bottom: 14px;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+.welcome h1 {
+    font-size: 32px; font-weight: 700; color: #111827;
+    margin-bottom: 8px; letter-spacing: -0.02em;
 }
-.sb-label {
-    font-size: 10px; font-weight: 600; color: #9CA3AF;
-    text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 8px;
+.welcome p { font-size: 15px; color: #6B7280; line-height: 1.7; }
+.welcome .empty-msg {
+    margin-top: 32px; padding: 20px 32px;
+    background: #F9FAFB; border: 1px solid #F0F1F3;
+    border-radius: 12px; font-size: 14px; color: #6B7280;
 }
-.sb-count { font-size: 11px; color: #6B7280; margin-bottom: 14px; }
+
+/* Admin panel */
+.admin-header {
+    font-size: 14px; font-weight: 600; color: #111827;
+    margin-bottom: 12px; padding-bottom: 8px;
+    border-bottom: 1px solid #F0F1F3;
+}
+.admin-success {
+    padding: 16px; background: #F0FDF4; border: 1px solid #BBF7D0;
+    border-radius: 10px; margin: 16px 0;
+    font-size: 13px; color: #166534;
+}
 
 /* Streamlit overrides */
 div[data-testid="stFileUploader"] > div {
@@ -108,414 +120,176 @@ div[data-testid="stFileUploader"] > div:hover {
 # Session State
 # ──────────────────────────────────────────────
 for k, v in {
-    "pages": [],
     "current_page": 0,
     "lang": "ko",
-    "translations": {},
-    "all_translated": False,
-    "file_name": "",
-    "processed": False,
+    "is_admin": False,
 }.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
 
 # ──────────────────────────────────────────────
-# PDF Processing — Memory Optimized
+# Storage Utils
 # ──────────────────────────────────────────────
-RENDER_SCALE = 2.5   # 180 DPI — sharp, lighter than 3x
-THUMB_SCALE = 0.35
-JPEG_QUALITY = 88
+def ensure_dirs():
+    for d in [DATA_DIR, SLIDES_KO, SLIDES_EN, SLIDES_THUMB]:
+        d.mkdir(parents=True, exist_ok=True)
 
 
-def pixmap_to_jpeg_b64(pixmap, quality=JPEG_QUALITY):
-    """Convert pixmap → JPEG base64. ~70% smaller than PNG."""
+def save_metadata(title_ko, title_en, num_pages):
+    meta = {
+        "title_ko": title_ko,
+        "title_en": title_en,
+        "num_pages": num_pages,
+        "updated_at": datetime.now().isoformat(),
+    }
+    META_FILE.write_text(json.dumps(meta, ensure_ascii=False, indent=2))
+    return meta
+
+
+def load_metadata():
+    if not META_FILE.exists():
+        return None
+    return json.loads(META_FILE.read_text())
+
+
+def has_data():
+    meta = load_metadata()
+    return meta is not None and meta.get("num_pages", 0) > 0
+
+
+# ──────────────────────────────────────────────
+# PDF → Images
+# ──────────────────────────────────────────────
+def pdf_to_images(file_bytes, output_dir, make_thumbs=False):
+    """Convert PDF pages to JPEG images. Returns page count."""
     from PIL import Image
-    img = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
-    buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=quality, optimize=True)
-    return base64.b64encode(buf.getvalue()).decode()
 
-
-def process_pdf(file_bytes):
     doc = fitz.open(stream=file_bytes, filetype="pdf")
-    pages = []
-    progress = st.progress(0, text="슬라이드 분석 중...")
+    num = len(doc)
 
-    for i in range(len(doc)):
+    for i in range(num):
         page = doc[i]
-        pw, ph = page.rect.width, page.rect.height
 
-        # ── Slide image (JPEG compressed) ──
-        pix = page.get_pixmap(matrix=fitz.Matrix(RENDER_SCALE, RENDER_SCALE), alpha=False)
-        try:
-            img_b64 = pixmap_to_jpeg_b64(pix, JPEG_QUALITY)
-            img_fmt = "jpeg"
-        except ImportError:
-            img_b64 = base64.b64encode(pix.tobytes("png")).decode()
-            img_fmt = "png"
+        # High-res slide image
+        pix = page.get_pixmap(
+            matrix=fitz.Matrix(RENDER_SCALE, RENDER_SCALE), alpha=False
+        )
+        img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=JPEG_QUALITY, optimize=True)
+        (output_dir / f"page_{i+1:03d}.jpg").write_bytes(buf.getvalue())
 
-        # ── Thumbnail (low-quality JPEG) ──
-        tpix = page.get_pixmap(matrix=fitz.Matrix(THUMB_SCALE, THUMB_SCALE), alpha=False)
-        try:
-            thumb_b64 = pixmap_to_jpeg_b64(tpix, 55)
-        except ImportError:
-            thumb_b64 = base64.b64encode(tpix.tobytes("png")).decode()
-
-        # ── Text extraction ──
-        text_blocks = extract_text_blocks(page, pw, ph)
-
-        pages.append({
-            "image_b64": img_b64,
-            "image_fmt": img_fmt,
-            "thumb_b64": thumb_b64,
-            "text_blocks": text_blocks,
-            "w": pw, "h": ph,
-        })
-        progress.progress((i + 1) / len(doc), text=f"슬라이드 {i+1}/{len(doc)} 처리 중...")
+        # Thumbnail (only for Korean version)
+        if make_thumbs:
+            tpix = page.get_pixmap(
+                matrix=fitz.Matrix(THUMB_SCALE, THUMB_SCALE), alpha=False
+            )
+            timg = Image.frombytes("RGB", (tpix.width, tpix.height), tpix.samples)
+            tbuf = io.BytesIO()
+            timg.save(tbuf, format="JPEG", quality=THUMB_QUALITY, optimize=True)
+            (SLIDES_THUMB / f"page_{i+1:03d}.jpg").write_bytes(tbuf.getvalue())
 
     doc.close()
-    progress.empty()
-    return pages
+    return num
+
+
+def get_slide_b64(lang, page_num):
+    """Read a slide image as base64."""
+    folder = SLIDES_KO if lang == "ko" else SLIDES_EN
+    path = folder / f"page_{page_num:03d}.jpg"
+    if not path.exists():
+        return None
+    return base64.b64encode(path.read_bytes()).decode()
+
+
+def get_thumb_b64(page_num):
+    """Read a thumbnail as base64."""
+    path = SLIDES_THUMB / f"page_{page_num:03d}.jpg"
+    if not path.exists():
+        return None
+    return base64.b64encode(path.read_bytes()).decode()
 
 
 # ──────────────────────────────────────────────
-# Text Extraction — Improved Accuracy
+# UI: Slide Viewer (for everyone)
 # ──────────────────────────────────────────────
-def extract_text_blocks(page, pw, ph):
-    blocks_raw = page.get_text("dict")["blocks"]
-    lines_out = []
+def render_slide(page_num, lang):
+    img_b64 = get_slide_b64(lang, page_num)
+    if not img_b64:
+        st.error(f"슬라이드 {page_num} 이미지를 찾을 수 없습니다.")
+        return
 
-    for block in blocks_raw:
-        if block["type"] != 0:
-            continue
-        for line in block["lines"]:
-            spans = line["spans"]
-            if not spans:
-                continue
+    html = f"""
+    <div style="position:relative; border-radius:6px; overflow:hidden;
+         border:1px solid #E8EBF0; box-shadow:0 1px 4px rgba(0,0,0,0.06);">
+        <img src="data:image/jpeg;base64,{img_b64}"
+             style="width:100%; display:block;" />
+    </div>"""
 
-            # [FIX #3] Proper span joining with spaces
-            parts = []
-            for s in spans:
-                t = s["text"]
-                if t.strip():
-                    parts.append(t.strip())
-            if not parts:
-                continue
-            text = " ".join(parts)
-            # Collapse multiple spaces
-            while "  " in text:
-                text = text.replace("  ", " ")
-
-            bbox = line["bbox"]
-            font_size = max(s["size"] for s in spans)
-
-            lines_out.append({
-                "str": text,
-                "x_pct": (bbox[0] / pw) * 100,
-                "y_pct": (bbox[1] / ph) * 100,
-                "w_pct": ((bbox[2] - bbox[0]) / pw) * 100,
-                "h_pct": ((bbox[3] - bbox[1]) / ph) * 100,
-                "font_size": font_size,
-            })
-
-    return group_into_blocks(lines_out)
+    # Estimate height from first slide aspect ratio (default 16:9)
+    st.components.v1.html(html, height=580, scrolling=False)
 
 
-def group_into_blocks(items):
-    """Group text lines into logical blocks with adaptive thresholds."""
-    if not items:
-        return []
-
-    items.sort(key=lambda t: (t["y_pct"], t["x_pct"]))
-    blocks = []
-    used = set()
-
-    for i, item in enumerate(items):
-        if i in used:
-            continue
-        block = [item]
-        used.add(i)
-
-        for j in range(i + 1, len(items)):
-            if j in used:
-                continue
-            last = block[-1]
-            gap = items[j]["y_pct"] - (last["y_pct"] + last["h_pct"])
-
-            # [FIX #3] Adaptive x-alignment threshold
-            # Wider text blocks → more tolerance
-            x_tol = max(2.0, min(block[0]["w_pct"] * 0.08, 5.0))
-            x_ok = abs(items[j]["x_pct"] - block[0]["x_pct"]) < x_tol
-
-            # [FIX #3] Tighter gap threshold to avoid cross-section merging
-            gap_ok = -0.3 < gap < last["h_pct"] * 0.8
-
-            if x_ok and gap_ok:
-                block.append(items[j])
-                used.add(j)
-
-        text = "\n".join(b["str"] for b in block)
-        x = min(b["x_pct"] for b in block)
-        y = min(b["y_pct"] for b in block)
-        w = max(b["x_pct"] + b["w_pct"] for b in block) - x
-        h = max(b["y_pct"] + b["h_pct"] for b in block) - y
-        fs = block[0]["font_size"]
-
-        blocks.append({
-            "str": text, "x_pct": x, "y_pct": y,
-            "w_pct": w, "h_pct": h, "font_size": fs,
-        })
-
-    return blocks
-
-
-# ──────────────────────────────────────────────
-# Translation — Robust Batch with Retry
-# ──────────────────────────────────────────────
-MAX_RETRIES = 2
-
-
-def translate_all_pages(pages):
-    """Translate ALL slides at once with progress bar."""
-    client = anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
-    translations = {}
-    total = len(pages)
-    progress = st.progress(0, text="전체 슬라이드 번역 중...")
-
-    for idx, page in enumerate(pages):
-        texts = [b["str"] for b in page["text_blocks"]]
-        if not texts:
-            translations[idx] = []
-        else:
-            translations[idx] = translate_with_retry(client, texts)
-        progress.progress((idx + 1) / total, text=f"번역 중... {idx+1}/{total}")
-
-    progress.empty()
-    return translations
-
-
-def translate_with_retry(client, texts):
-    """Translate with retry logic + array length validation."""
-    n = len(texts)
-
-    for attempt in range(MAX_RETRIES + 1):
-        try:
-            response = client.messages.create(
-                model="claude-sonnet-4-20250514",
-                max_tokens=8192,
-                system=f"""You are a professional Korean→English translator for board of directors (이사회) meeting materials at a major Korean corporation.
-
-Rules:
-1. Formal, concise business English for board-level readers.
-2. Keep proper nouns, company names, abbreviations, numbers unchanged (KRAFTON, ADK, 3Q24, etc.).
-3. Be concise — slides have limited space. Match the original brevity.
-4. If text is already English or is a number/symbol, return it unchanged.
-5. Translate naturally, not word-for-word. Clarity over literalness.
-6. Return EXACTLY {n} items in the JSON array — one per input, same order.
-7. Return ONLY a valid JSON array. No markdown, no explanation.""",
-                messages=[{
-                    "role": "user",
-                    "content": f"Translate {n} text blocks Korean→English. Return JSON array with exactly {n} strings:\n{json.dumps(texts, ensure_ascii=False)}"
-                }],
-            )
-            raw = response.content[0].text.strip()
-            raw = raw.replace("```json", "").replace("```", "").strip()
-            result = json.loads(raw)
-
-            if not isinstance(result, list):
-                raise ValueError("Not a JSON array")
-
-            # [FIX #2] Validate & fix length mismatch
-            if len(result) < n:
-                result.extend(texts[len(result):])  # pad with originals
-            elif len(result) > n:
-                result = result[:n]  # trim excess
-
-            return result
-
-        except Exception as e:
-            if attempt < MAX_RETRIES:
-                continue
-            st.warning(f"번역 실패 ({MAX_RETRIES}회 재시도 후): {e}")
-            return list(texts)  # fallback to originals
-
-
-# ──────────────────────────────────────────────
-# Slide Renderer
-# ──────────────────────────────────────────────
-def render_slide(page_data, translated_texts=None, lang="ko"):
-    img_b64 = page_data["image_b64"]
-    img_fmt = page_data.get("image_fmt", "png")
-    aspect = page_data["h"] / page_data["w"]
-
-    if lang == "ko" or not translated_texts:
-        # Korean: pure original image — zero overlay
-        html = f"""
-        <div style="position:relative; border-radius:6px; overflow:hidden;
-             border:1px solid #E8EBF0; box-shadow:0 1px 4px rgba(0,0,0,0.06);">
-            <img src="data:image/{img_fmt};base64,{img_b64}"
-                 style="width:100%; display:block;" />
-        </div>"""
-    else:
-        # English: image + translated overlays
-        overlays = ""
-        blocks = page_data["text_blocks"]
-        for i, block in enumerate(blocks):
-            if i >= len(translated_texts):
-                break
-
-            text = translated_texts[i]
-            escaped = html_lib.escape(text).replace("\n", "<br>")
-            fs = max(block["font_size"] * 0.72, 7)
-            fw = 600 if block["font_size"] > 13 else 400
-
-            # [FIX #2] Auto-expand width for English text
-            kr_chars = len(block["str"].replace("\n", ""))
-            en_chars = len(text.replace("\n", ""))
-            ratio = max(en_chars / max(kr_chars, 1), 1.0)
-            expanded_w = block["w_pct"] * max(ratio * 0.85, 1.05)
-            # Clamp: don't overflow past right edge (leave 3% margin)
-            max_w = 97 - block["x_pct"]
-            expanded_w = min(expanded_w, max_w)
-
-            overlays += f"""
-            <div style="position:absolute;
-                left:{block['x_pct']:.2f}%; top:{block['y_pct']:.2f}%;
-                width:{expanded_w:.2f}%; min-height:{block['h_pct']:.2f}%;
-                background:rgba(255,255,255,0.93);
-                border-left:2.5px solid #4F46E5;
-                padding:2px 6px 2px 5px;
-                font-size:clamp(6px, {fs*0.11:.2f}vw, {fs*1.1:.0f}px);
-                font-weight:{fw};
-                line-height:1.30;
-                font-family:'Inter','Noto Sans KR',sans-serif;
-                color:#111827;
-                white-space:pre-wrap;
-                word-break:break-word;
-                overflow-wrap:break-word;
-                border-radius:2px;
-                pointer-events:none;
-            ">{escaped}</div>"""
-
-        html = f"""
-        <div style="position:relative; border-radius:6px; overflow:hidden;
-             border:1px solid #E8EBF0; box-shadow:0 1px 4px rgba(0,0,0,0.06);">
-            <img src="data:image/{img_fmt};base64,{img_b64}"
-                 style="width:100%; display:block;" />
-            {overlays}
-        </div>"""
-
-    height = int(760 * aspect) + 10
-    st.components.v1.html(html, height=height, scrolling=False)
-
-
-# ──────────────────────────────────────────────
-# UI: Upload Screen
-# ──────────────────────────────────────────────
-def render_upload():
-    st.markdown("""
-    <div class="upload-area">
-        <h1>BOD Slide Translator</h1>
-        <p class="sub">
-            이사회 미팅 자료 PDF를 업로드하면, 슬라이드를 원본 그대로 보여주면서<br>
-            AI가 텍스트만 한↔영 번역합니다.
-        </p>
-        <div class="features">
-            <div class="feat">
-                <div class="ic">📄</div>
-                <div class="tt">원본 그대로 렌더링</div>
-                <div class="dd">PDF 슬라이드를 고해상도로 렌더링하여 원본과 동일한 화면을 보여줍니다.</div>
-            </div>
-            <div class="feat">
-                <div class="ic">🌐</div>
-                <div class="tt">AI 한↔영 번역</div>
-                <div class="dd">Claude AI가 이사회 문체로 번역합니다. 인명·약어는 자동 유지됩니다.</div>
-            </div>
-            <div class="feat">
-                <div class="ic">⚡</div>
-                <div class="tt">전체 일괄 번역</div>
-                <div class="dd">버튼 한 번에 모든 슬라이드를 번역하고, 자유롭게 넘기며 확인합니다.</div>
-            </div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        uploaded = st.file_uploader("PDF 파일 업로드", type=["pdf"], label_visibility="collapsed")
-        if uploaded:
-            st.session_state.file_name = uploaded.name
-            pages = process_pdf(uploaded.read())
-            st.session_state.pages = pages
-            st.session_state.processed = True
-            st.session_state.current_page = 0
-            st.session_state.translations = {}
-            st.session_state.all_translated = False
-            st.session_state.lang = "ko"
-            st.rerun()
-
-
-# ──────────────────────────────────────────────
-# UI: Viewer
-# ──────────────────────────────────────────────
 def render_viewer():
-    pages = st.session_state.pages
+    meta = load_metadata()
+    total = meta["num_pages"]
     cur = st.session_state.current_page
     lang = st.session_state.lang
-    total = len(pages)
-    is_translated = st.session_state.all_translated
+
+    # Clamp current page
+    if cur >= total:
+        cur = 0
+        st.session_state.current_page = 0
 
     # ── Sidebar ──
     with st.sidebar:
         st.markdown("""
         <div class="sb-brand">BOD TRANSLATOR</div>
-        <div class="sb-sub">Slide Translation Tool</div>
+        <div class="sb-sub">Board Meeting Materials</div>
         """, unsafe_allow_html=True)
 
-        safe_name = html_lib.escape(st.session_state.file_name)
-        if safe_name:
-            st.markdown(f'<div class="sb-file" title="{safe_name}">{safe_name}</div>',
-                        unsafe_allow_html=True)
+        st.markdown(f'<div class="sb-count">📑 {total}개 슬라이드</div>',
+                    unsafe_allow_html=True)
 
-        st.markdown(f'<div class="sb-count">📑 {total}개 슬라이드</div>', unsafe_allow_html=True)
-        st.markdown('<div class="sb-label">Slides</div>', unsafe_allow_html=True)
+        updated = meta.get("updated_at", "")[:10]
+        st.markdown(f'<div class="sb-meta">최종 업데이트: {updated}</div>',
+                    unsafe_allow_html=True)
 
-        # [FIX #5] Actual thumbnail images in sidebar
-        for i in range(total):
-            is_cur = i == cur
+        st.markdown('<div class="sb-label" style="margin-top:16px;">Slides</div>',
+                    unsafe_allow_html=True)
+
+        # Thumbnails
+        for i in range(1, total + 1):
+            is_cur = (i - 1) == cur
             bdr = "#4F46E5" if is_cur else "#E8EBF0"
             bdr_w = "2px" if is_cur else "1px"
             opa = "1" if is_cur else "0.5"
             shd = "0 0 0 3px rgba(79,70,229,0.1)" if is_cur else "none"
 
-            st.markdown(f"""
-            <div style="border-radius:6px; overflow:hidden;
-                 border:{bdr_w} solid {bdr}; opacity:{opa};
-                 box-shadow:{shd}; margin-bottom:4px; position:relative;">
-                <img src="data:image/jpeg;base64,{pages[i]['thumb_b64']}"
-                     style="width:100%; display:block;" />
-                <span style="position:absolute; bottom:3px; right:5px;
-                      font-size:9px; font-weight:600; color:#fff;
-                      background:rgba(0,0,0,0.5); padding:1px 5px;
-                      border-radius:3px;">{i+1}</span>
-            </div>
-            """, unsafe_allow_html=True)
+            thumb = get_thumb_b64(i)
+            if thumb:
+                st.markdown(f"""
+                <div style="border-radius:6px; overflow:hidden;
+                     border:{bdr_w} solid {bdr}; opacity:{opa};
+                     box-shadow:{shd}; margin-bottom:4px; position:relative;">
+                    <img src="data:image/jpeg;base64,{thumb}"
+                         style="width:100%; display:block;" />
+                    <span style="position:absolute; bottom:3px; right:5px;
+                          font-size:9px; font-weight:600; color:#fff;
+                          background:rgba(0,0,0,0.5); padding:1px 5px;
+                          border-radius:3px;">{i}</span>
+                </div>
+                """, unsafe_allow_html=True)
 
-            if st.button(f"슬라이드 {i+1}", key=f"nav_{i}",
+            if st.button(f"슬라이드 {i}", key=f"nav_{i}",
                          use_container_width=True,
                          type="primary" if is_cur else "secondary"):
-                st.session_state.current_page = i
+                st.session_state.current_page = i - 1
                 st.rerun()
 
-        st.divider()
-        if st.button("↻ 새 파일 업로드", use_container_width=True):
-            for k in list(st.session_state.keys()):
-                del st.session_state[k]
-            st.rerun()
-
-    # ── Header ──
-    h1, h2, h3 = st.columns([4, 4, 3])
+    # ── Header: Language Toggle ──
+    h1, h2 = st.columns([5, 6])
 
     with h1:
         c1, c2, c3 = st.columns([1, 1, 2])
@@ -527,30 +301,17 @@ def render_viewer():
         with c2:
             if st.button("🇺🇸  English", use_container_width=True,
                          type="primary" if lang == "en" else "secondary"):
-                if not is_translated:
-                    st.session_state.translations = translate_all_pages(pages)
-                    st.session_state.all_translated = True
                 st.session_state.lang = "en"
                 st.rerun()
 
     with h2:
-        if lang == "en" and is_translated:
-            st.markdown('<span class="status done">✓ 전체 번역 완료</span>',
-                        unsafe_allow_html=True)
-        elif lang == "ko":
-            st.markdown('<span class="status info">원본 (한국어)</span>',
-                        unsafe_allow_html=True)
-
-    with h3:
-        bc = len(pages[cur]["text_blocks"])
-        st.markdown(
-            f'<div style="text-align:right;">'
-            f'<span style="font-size:12px;color:#9CA3AF;">텍스트 블록: {bc}개</span></div>',
-            unsafe_allow_html=True)
+        label = "원본 (한국어)" if lang == "ko" else "English Version"
+        cls = "info" if lang == "ko" else "done"
+        st.markdown(f'<span class="status {cls}">{label}</span>',
+                    unsafe_allow_html=True)
 
     # ── Slide ──
-    translated = st.session_state.translations.get(cur) if lang == "en" else None
-    render_slide(pages[cur], translated, lang)
+    render_slide(cur + 1, lang)
 
     # ── Navigation ──
     n1, n2, n3, n4, n5 = st.columns([3, 1, 1, 1, 3])
@@ -570,9 +331,129 @@ def render_viewer():
 
 
 # ──────────────────────────────────────────────
+# UI: Welcome (no data yet)
+# ──────────────────────────────────────────────
+def render_welcome():
+    st.markdown("""
+    <div class="welcome">
+        <h1>BOD Slide Translator</h1>
+        <p>이사회 미팅 자료를 한↔영 즉시 전환하여 확인할 수 있습니다.</p>
+        <div class="empty-msg">
+            📭 아직 등록된 자료가 없습니다.<br>
+            사무국에서 자료를 업로드하면 이곳에서 바로 확인할 수 있습니다.
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+# ──────────────────────────────────────────────
+# UI: Admin Panel
+# ──────────────────────────────────────────────
+def render_admin():
+    st.markdown('<div class="admin-header">📤 이사회 자료 업로드 (사무국 전용)</div>',
+                unsafe_allow_html=True)
+
+    meta = load_metadata()
+    if meta:
+        st.info(f"현재 등록된 자료: {meta['num_pages']}페이지 (업데이트: {meta['updated_at'][:10]})")
+
+    st.markdown("**한국어 원본 PDF**")
+    pdf_ko = st.file_uploader("한국어 PDF", type=["pdf"], key="pdf_ko",
+                               label_visibility="collapsed")
+
+    st.markdown("**영문 번역본 PDF**")
+    pdf_en = st.file_uploader("영문 PDF", type=["pdf"], key="pdf_en",
+                               label_visibility="collapsed")
+
+    if pdf_ko and pdf_en:
+        if st.button("✅ 자료 저장", type="primary", use_container_width=True):
+            ensure_dirs()
+
+            # Clear old files
+            for d in [SLIDES_KO, SLIDES_EN, SLIDES_THUMB]:
+                for f in d.glob("*.jpg"):
+                    f.unlink()
+
+            progress = st.progress(0, text="한국어 PDF 처리 중...")
+
+            # Process Korean PDF (with thumbnails)
+            ko_bytes = pdf_ko.read()
+            num_ko = pdf_to_images(ko_bytes, SLIDES_KO, make_thumbs=True)
+            progress.progress(50, text="영문 PDF 처리 중...")
+
+            # Process English PDF
+            en_bytes = pdf_en.read()
+            num_en = pdf_to_images(en_bytes, SLIDES_EN, make_thumbs=False)
+            progress.progress(100, text="완료!")
+            progress.empty()
+
+            # Validate page count
+            if num_ko != num_en:
+                st.error(f"⚠️ 페이지 수가 다릅니다: 한국어 {num_ko}페이지 / 영문 {num_en}페이지. "
+                         f"동일한 자료의 한국어·영문 버전을 올려주세요.")
+                return
+
+            # Save metadata
+            save_metadata(pdf_ko.name, pdf_en.name, num_ko)
+
+            # Reset viewer state
+            st.session_state.current_page = 0
+            st.session_state.lang = "ko"
+
+            st.markdown(f"""
+            <div class="admin-success">
+                ✅ 저장 완료! {num_ko}개 슬라이드가 등록되었습니다.<br>
+                이사님들은 이 앱 URL로 접속하면 바로 확인할 수 있습니다.
+            </div>
+            """, unsafe_allow_html=True)
+
+            st.rerun()
+
+    elif pdf_ko or pdf_en:
+        st.caption("한국어 PDF와 영문 PDF를 모두 업로드해주세요.")
+
+
+# ──────────────────────────────────────────────
+# Sidebar: Admin Login
+# ──────────────────────────────────────────────
+def render_sidebar_admin():
+    with st.sidebar:
+        st.divider()
+        st.markdown('<div class="sb-label">관리자</div>', unsafe_allow_html=True)
+
+        if st.session_state.is_admin:
+            st.markdown("🔓 사무국 모드", unsafe_allow_html=True)
+            if st.button("🔒 잠금", use_container_width=True):
+                st.session_state.is_admin = False
+                st.rerun()
+        else:
+            pw = st.text_input("비밀번호", type="password", label_visibility="collapsed",
+                               placeholder="사무국 비밀번호")
+            if pw:
+                if pw == st.secrets.get("ADMIN_PASSWORD", ""):
+                    st.session_state.is_admin = True
+                    st.rerun()
+                else:
+                    st.caption("❌ 비밀번호가 틀립니다.")
+
+
+# ──────────────────────────────────────────────
 # Main
 # ──────────────────────────────────────────────
-if not st.session_state.get("processed"):
-    render_upload()
-else:
-    render_viewer()
+def main():
+    data_exists = has_data()
+
+    if data_exists:
+        render_viewer()
+    else:
+        render_welcome()
+
+    # Admin panel (sidebar login + upload section)
+    render_sidebar_admin()
+
+    if st.session_state.is_admin:
+        st.divider()
+        render_admin()
+
+
+main()
