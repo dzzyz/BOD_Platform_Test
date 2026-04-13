@@ -241,6 +241,44 @@ def render_slide(page_num, lang):
     st.components.v1.html(html, height=height, scrolling=False)
 
 
+def render_slide_compare(page_num):
+    """Show Korean and English slides side by side."""
+    ko_b64 = get_slide_b64("ko", page_num)
+    en_b64 = get_slide_b64("en", page_num)
+
+    if not ko_b64 or not en_b64:
+        st.error(f"슬라이드 {page_num} 이미지를 찾을 수 없습니다.")
+        return
+
+    html = f"""
+    <div style="display:flex; gap:12px; width:100%;">
+        <div style="flex:1; min-width:0;">
+            <div style="font-size:11px; font-weight:600; color:#6B7280;
+                 margin-bottom:6px; text-align:center;">🇰🇷 한국어</div>
+            <div style="border-radius:6px; overflow:hidden;
+                 border:1px solid #E8EBF0; box-shadow:0 1px 4px rgba(0,0,0,0.06);">
+                <img src="data:image/jpeg;base64,{ko_b64}"
+                     style="width:100%; display:block;" />
+            </div>
+        </div>
+        <div style="flex:1; min-width:0;">
+            <div style="font-size:11px; font-weight:600; color:#4F46E5;
+                 margin-bottom:6px; text-align:center;">🇺🇸 English</div>
+            <div style="border-radius:6px; overflow:hidden;
+                 border:1px solid #D1D5F0; box-shadow:0 1px 4px rgba(79,70,229,0.08);">
+                <img src="data:image/jpeg;base64,{en_b64}"
+                     style="width:100%; display:block;" />
+            </div>
+        </div>
+    </div>"""
+
+    meta = load_metadata()
+    aspect = meta.get("aspect_ratio", 0.5625) if meta else 0.5625
+    # Side by side: each image is ~half width, so height is roughly half
+    height = int(480 * aspect) + 36
+    st.components.v1.html(html, height=height, scrolling=False)
+
+
 def render_viewer():
     meta = load_metadata()
     total = meta["num_pages"]
@@ -299,10 +337,10 @@ def render_viewer():
                 st.rerun()
 
     # ── Header: Language Toggle ──
-    h1, h2 = st.columns([5, 6])
+    h1, h2 = st.columns([6, 5])
 
     with h1:
-        c1, c2, c3 = st.columns([1, 1, 2])
+        c1, c2, c3, c4 = st.columns([1, 1, 1, 1])
         with c1:
             if st.button("🇰🇷  한국어", use_container_width=True,
                          type="primary" if lang == "ko" else "secondary"):
@@ -313,15 +351,23 @@ def render_viewer():
                          type="primary" if lang == "en" else "secondary"):
                 st.session_state.lang = "en"
                 st.rerun()
+        with c3:
+            if st.button("🔀  비교", use_container_width=True,
+                         type="primary" if lang == "compare" else "secondary"):
+                st.session_state.lang = "compare"
+                st.rerun()
 
     with h2:
-        label = "원본 (한국어)" if lang == "ko" else "English Version"
+        labels = {"ko": "원본 (한국어)", "en": "English Version", "compare": "한국어 / English 비교"}
         cls = "info" if lang == "ko" else "done"
-        st.markdown(f'<span class="status {cls}">{label}</span>',
+        st.markdown(f'<span class="status {cls}">{labels.get(lang, "")}</span>',
                     unsafe_allow_html=True)
 
     # ── Slide ──
-    render_slide(cur + 1, lang)
+    if lang == "compare":
+        render_slide_compare(cur + 1)
+    else:
+        render_slide(cur + 1, lang)
 
     # ── Navigation ──
     n1, n2, n3, n4, n5 = st.columns([3, 1, 1, 1, 3])
