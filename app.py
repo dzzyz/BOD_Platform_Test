@@ -3,7 +3,8 @@ import fitz  # PyMuPDF
 import anthropic
 import json
 import base64
-import time
+import html as html_lib
+import io
 
 # ──────────────────────────────────────────────
 # Page Config
@@ -26,26 +27,21 @@ html, body, [class*="css"] {
     font-family: 'Inter', 'Noto Sans KR', -apple-system, sans-serif;
 }
 
-/* ── Hide Streamlit chrome ── */
 #MainMenu, header, footer { visibility: hidden; }
 header { display: none; }
-
-/* ── App background ── */
 .stApp { background: #FFFFFF; }
 
-/* ── Main content area ── */
 .block-container {
     padding: 1.2rem 2rem 1rem !important;
     max-width: 1200px;
 }
 
-/* ── Sidebar ── */
 section[data-testid="stSidebar"] {
     background: #F7F8FA !important;
     border-right: 1px solid #E8EBF0;
 }
 
-/* ── Upload area ── */
+/* Upload */
 .upload-area {
     display: flex; flex-direction: column;
     align-items: center; justify-content: center;
@@ -56,8 +52,7 @@ section[data-testid="stSidebar"] {
     margin-bottom: 8px; letter-spacing: -0.02em;
 }
 .upload-area .sub {
-    font-size: 15px; color: #6B7280; line-height: 1.7;
-    margin-bottom: 32px;
+    font-size: 15px; color: #6B7280; line-height: 1.7; margin-bottom: 32px;
 }
 .features {
     display: grid; grid-template-columns: repeat(3, 1fr);
@@ -68,93 +63,17 @@ section[data-testid="stSidebar"] {
     border-radius: 12px; padding: 20px 16px; text-align: left;
     transition: border-color 0.2s, box-shadow 0.2s;
 }
-.feat:hover {
-    border-color: #D1D5DB; box-shadow: 0 2px 8px rgba(0,0,0,0.04);
-}
+.feat:hover { border-color: #D1D5DB; box-shadow: 0 2px 8px rgba(0,0,0,0.04); }
 .feat .ic { font-size: 20px; margin-bottom: 8px; }
 .feat .tt { font-size: 13px; font-weight: 600; color: #111827; margin-bottom: 3px; }
 .feat .dd { font-size: 11px; color: #9CA3AF; line-height: 1.5; }
 
-/* ── Header bar ── */
-.header-bar {
-    display: flex; align-items: center; justify-content: space-between;
-    padding: 0 0 16px; margin-bottom: 16px;
-    border-bottom: 1px solid #F0F1F3;
-}
-.header-left { display: flex; align-items: center; gap: 14px; }
-.header-right { display: flex; align-items: center; gap: 10px; }
-
-/* ── Language toggle ── */
-.lang-toggle {
-    display: inline-flex; background: #F3F4F6;
-    border-radius: 10px; padding: 3px; gap: 2px;
-}
-.lang-btn {
-    padding: 7px 22px; border-radius: 8px; border: none;
-    font-size: 13px; font-weight: 600; cursor: pointer;
-    transition: all 0.2s; font-family: inherit;
-    text-decoration: none; display: inline-block;
-}
-.lang-btn.active {
-    background: #4F46E5; color: #fff;
-    box-shadow: 0 1px 4px rgba(79,70,229,0.3);
-}
-.lang-btn.inactive {
-    background: transparent; color: #9CA3AF;
-}
-
-/* ── Status ── */
+/* Status */
 .status { font-size: 12px; font-weight: 500; }
 .status.done { color: #059669; }
 .status.info { color: #6B7280; }
 
-/* ── Slide container ── */
-.slide-container {
-    border: 1px solid #E8EBF0;
-    border-radius: 8px;
-    overflow: hidden;
-    background: #FAFBFC;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.04);
-}
-.slide-container img {
-    width: 100%; display: block;
-}
-
-/* ── Text overlay (English mode) ── */
-.txt-overlay {
-    position: absolute; pointer-events: none;
-    background: rgba(255,255,255,0.93);
-    border-left: 2.5px solid #4F46E5;
-    padding: 1px 5px 1px 4px;
-    line-height: 1.25;
-    font-family: 'Inter', 'Noto Sans KR', sans-serif;
-    color: #111827;
-    white-space: pre-wrap;
-    word-break: keep-all;
-    overflow: hidden;
-    border-radius: 1px;
-}
-
-/* ── Navigation ── */
-.slide-nav {
-    display: flex; align-items: center; justify-content: center;
-    gap: 20px; padding: 14px 0 4px;
-}
-.nav-btn {
-    padding: 6px 20px; border-radius: 8px;
-    border: 1px solid #E5E7EB; background: #fff;
-    color: #374151; font-size: 13px; font-weight: 500;
-    cursor: pointer; transition: all 0.15s;
-    font-family: inherit;
-}
-.nav-btn:hover { background: #F9FAFB; border-color: #D1D5DB; }
-.nav-btn:disabled { color: #D1D5DB; cursor: default; }
-.nav-info {
-    font-size: 14px; color: #6B7280; font-weight: 500;
-    font-variant-numeric: tabular-nums; min-width: 70px; text-align: center;
-}
-
-/* ── Sidebar elements ── */
+/* Sidebar */
 .sb-brand {
     font-size: 10px; font-weight: 700; letter-spacing: 0.12em;
     text-transform: uppercase; color: #4F46E5; margin-bottom: 2px;
@@ -168,33 +87,25 @@ section[data-testid="stSidebar"] {
 }
 .sb-label {
     font-size: 10px; font-weight: 600; color: #9CA3AF;
-    text-transform: uppercase; letter-spacing: 0.06em;
-    margin-bottom: 8px;
+    text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 8px;
 }
-.sb-count {
-    font-size: 11px; color: #6B7280; margin-bottom: 14px;
-}
+.sb-count { font-size: 11px; color: #6B7280; margin-bottom: 14px; }
 
-/* ── Streamlit overrides ── */
+/* Streamlit overrides */
 div[data-testid="stFileUploader"] > div {
     border: 2px dashed #E5E7EB !important;
-    border-radius: 12px !important;
-    background: #FAFBFC !important;
+    border-radius: 12px !important; background: #FAFBFC !important;
 }
 div[data-testid="stFileUploader"] > div:hover {
-    border-color: #4F46E5 !important;
-    background: #F5F3FF !important;
+    border-color: #4F46E5 !important; background: #F5F3FF !important;
 }
-.stButton > button {
-    border-radius: 8px; font-weight: 500;
-    transition: all 0.15s;
-}
+.stButton > button { border-radius: 8px; font-weight: 500; transition: all 0.15s; }
 </style>
 """, unsafe_allow_html=True)
 
 
 # ──────────────────────────────────────────────
-# Session State Init
+# Session State
 # ──────────────────────────────────────────────
 for k, v in {
     "pages": [],
@@ -210,10 +121,21 @@ for k, v in {
 
 
 # ──────────────────────────────────────────────
-# PDF Processing — High Fidelity
+# PDF Processing — Memory Optimized
 # ──────────────────────────────────────────────
-RENDER_SCALE = 3.0   # 216 DPI — crisp, screenshot-quality
+RENDER_SCALE = 2.5   # 180 DPI — sharp, lighter than 3x
 THUMB_SCALE = 0.35
+JPEG_QUALITY = 88
+
+
+def pixmap_to_jpeg_b64(pixmap, quality=JPEG_QUALITY):
+    """Convert pixmap → JPEG base64. ~70% smaller than PNG."""
+    from PIL import Image
+    img = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=quality, optimize=True)
+    return base64.b64encode(buf.getvalue()).decode()
+
 
 def process_pdf(file_bytes):
     doc = fitz.open(stream=file_bytes, filetype="pdf")
@@ -224,25 +146,31 @@ def process_pdf(file_bytes):
         page = doc[i]
         pw, ph = page.rect.width, page.rect.height
 
-        # ── High-res render (screenshot quality) ──
-        mat = fitz.Matrix(RENDER_SCALE, RENDER_SCALE)
-        pix = page.get_pixmap(matrix=mat, alpha=False)
-        img_b64 = base64.b64encode(pix.tobytes("png")).decode()
+        # ── Slide image (JPEG compressed) ──
+        pix = page.get_pixmap(matrix=fitz.Matrix(RENDER_SCALE, RENDER_SCALE), alpha=False)
+        try:
+            img_b64 = pixmap_to_jpeg_b64(pix, JPEG_QUALITY)
+            img_fmt = "jpeg"
+        except ImportError:
+            img_b64 = base64.b64encode(pix.tobytes("png")).decode()
+            img_fmt = "png"
 
-        # ── Thumbnail ──
-        tmat = fitz.Matrix(THUMB_SCALE, THUMB_SCALE)
-        tpix = page.get_pixmap(matrix=tmat, alpha=False)
-        thumb_b64 = base64.b64encode(tpix.tobytes("png")).decode()
+        # ── Thumbnail (low-quality JPEG) ──
+        tpix = page.get_pixmap(matrix=fitz.Matrix(THUMB_SCALE, THUMB_SCALE), alpha=False)
+        try:
+            thumb_b64 = pixmap_to_jpeg_b64(tpix, 55)
+        except ImportError:
+            thumb_b64 = base64.b64encode(tpix.tobytes("png")).decode()
 
-        # ── Text extraction with precise positions ──
+        # ── Text extraction ──
         text_blocks = extract_text_blocks(page, pw, ph)
 
         pages.append({
             "image_b64": img_b64,
+            "image_fmt": img_fmt,
             "thumb_b64": thumb_b64,
             "text_blocks": text_blocks,
             "w": pw, "h": ph,
-            "img_w": pix.width, "img_h": pix.height,
         })
         progress.progress((i + 1) / len(doc), text=f"슬라이드 {i+1}/{len(doc)} 처리 중...")
 
@@ -251,8 +179,10 @@ def process_pdf(file_bytes):
     return pages
 
 
+# ──────────────────────────────────────────────
+# Text Extraction — Improved Accuracy
+# ──────────────────────────────────────────────
 def extract_text_blocks(page, pw, ph):
-    """Extract text lines with precise percentage-based coordinates."""
     blocks_raw = page.get_text("dict")["blocks"]
     lines_out = []
 
@@ -263,13 +193,19 @@ def extract_text_blocks(page, pw, ph):
             spans = line["spans"]
             if not spans:
                 continue
-            text = ""
+
+            # [FIX #3] Proper span joining with spaces
+            parts = []
             for s in spans:
                 t = s["text"]
                 if t.strip():
-                    text += t
-            if not text.strip():
+                    parts.append(t.strip())
+            if not parts:
                 continue
+            text = " ".join(parts)
+            # Collapse multiple spaces
+            while "  " in text:
+                text = text.replace("  ", " ")
 
             bbox = line["bbox"]
             font_size = max(s["size"] for s in spans)
@@ -283,11 +219,11 @@ def extract_text_blocks(page, pw, ph):
                 "font_size": font_size,
             })
 
-    # Group lines into logical blocks
     return group_into_blocks(lines_out)
 
 
 def group_into_blocks(items):
+    """Group text lines into logical blocks with adaptive thresholds."""
     if not items:
         return []
 
@@ -306,9 +242,16 @@ def group_into_blocks(items):
                 continue
             last = block[-1]
             gap = items[j]["y_pct"] - (last["y_pct"] + last["h_pct"])
-            x_aligned = abs(items[j]["x_pct"] - block[0]["x_pct"]) < 2.5
 
-            if x_aligned and -0.3 < gap < last["h_pct"] * 1.0:
+            # [FIX #3] Adaptive x-alignment threshold
+            # Wider text blocks → more tolerance
+            x_tol = max(2.0, min(block[0]["w_pct"] * 0.08, 5.0))
+            x_ok = abs(items[j]["x_pct"] - block[0]["x_pct"]) < x_tol
+
+            # [FIX #3] Tighter gap threshold to avoid cross-section merging
+            gap_ok = -0.3 < gap < last["h_pct"] * 0.8
+
+            if x_ok and gap_ok:
                 block.append(items[j])
                 used.add(j)
 
@@ -328,10 +271,13 @@ def group_into_blocks(items):
 
 
 # ──────────────────────────────────────────────
-# Translation — Batch (All Pages at Once)
+# Translation — Robust Batch with Retry
 # ──────────────────────────────────────────────
+MAX_RETRIES = 2
+
+
 def translate_all_pages(pages):
-    """Translate ALL slides at once, with progress."""
+    """Translate ALL slides at once with progress bar."""
     client = anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
     translations = {}
     total = len(pages)
@@ -341,14 +287,24 @@ def translate_all_pages(pages):
         texts = [b["str"] for b in page["text_blocks"]]
         if not texts:
             translations[idx] = []
-            progress.progress((idx + 1) / total, text=f"번역 중... {idx+1}/{total}")
-            continue
+        else:
+            translations[idx] = translate_with_retry(client, texts)
+        progress.progress((idx + 1) / total, text=f"번역 중... {idx+1}/{total}")
 
+    progress.empty()
+    return translations
+
+
+def translate_with_retry(client, texts):
+    """Translate with retry logic + array length validation."""
+    n = len(texts)
+
+    for attempt in range(MAX_RETRIES + 1):
         try:
             response = client.messages.create(
                 model="claude-sonnet-4-20250514",
-                max_tokens=4096,
-                system="""You are a professional Korean→English translator for board of directors (이사회) meeting materials at a major Korean corporation.
+                max_tokens=8192,
+                system=f"""You are a professional Korean→English translator for board of directors (이사회) meeting materials at a major Korean corporation.
 
 Rules:
 1. Formal, concise business English for board-level readers.
@@ -356,78 +312,96 @@ Rules:
 3. Be concise — slides have limited space. Match the original brevity.
 4. If text is already English or is a number/symbol, return it unchanged.
 5. Translate naturally, not word-for-word. Clarity over literalness.
-6. Return ONLY a JSON array of translated strings in exact input order. No markdown, no explanation.""",
+6. Return EXACTLY {n} items in the JSON array — one per input, same order.
+7. Return ONLY a valid JSON array. No markdown, no explanation.""",
                 messages=[{
                     "role": "user",
-                    "content": f"Translate each text block Korean→English. Return JSON array:\n{json.dumps(texts, ensure_ascii=False)}"
+                    "content": f"Translate {n} text blocks Korean→English. Return JSON array with exactly {n} strings:\n{json.dumps(texts, ensure_ascii=False)}"
                 }],
             )
-            raw = response.content[0].text.strip().replace("```json", "").replace("```", "").strip()
-            translations[idx] = json.loads(raw)
+            raw = response.content[0].text.strip()
+            raw = raw.replace("```json", "").replace("```", "").strip()
+            result = json.loads(raw)
+
+            if not isinstance(result, list):
+                raise ValueError("Not a JSON array")
+
+            # [FIX #2] Validate & fix length mismatch
+            if len(result) < n:
+                result.extend(texts[len(result):])  # pad with originals
+            elif len(result) > n:
+                result = result[:n]  # trim excess
+
+            return result
+
         except Exception as e:
-            st.warning(f"슬라이드 {idx+1} 번역 실패: {e}")
-            translations[idx] = texts  # fallback to original
-
-        progress.progress((idx + 1) / total, text=f"번역 중... {idx+1}/{total}")
-
-    progress.empty()
-    return translations
+            if attempt < MAX_RETRIES:
+                continue
+            st.warning(f"번역 실패 ({MAX_RETRIES}회 재시도 후): {e}")
+            return list(texts)  # fallback to originals
 
 
 # ──────────────────────────────────────────────
-# Slide Renderer (HTML)
+# Slide Renderer
 # ──────────────────────────────────────────────
 def render_slide(page_data, translated_texts=None, lang="ko"):
-    """Render slide as high-fidelity image. In EN mode, overlay translated text."""
     img_b64 = page_data["image_b64"]
+    img_fmt = page_data.get("image_fmt", "png")
     aspect = page_data["h"] / page_data["w"]
 
     if lang == "ko" or not translated_texts:
-        # ── Korean: pure image, no overlay ──
+        # Korean: pure original image — zero overlay
         html = f"""
-        <div class="slide-container" style="position:relative; border-radius:6px;
-             overflow:hidden; border:1px solid #E8EBF0;
-             box-shadow: 0 1px 4px rgba(0,0,0,0.06);">
-            <img src="data:image/png;base64,{img_b64}"
+        <div style="position:relative; border-radius:6px; overflow:hidden;
+             border:1px solid #E8EBF0; box-shadow:0 1px 4px rgba(0,0,0,0.06);">
+            <img src="data:image/{img_fmt};base64,{img_b64}"
                  style="width:100%; display:block;" />
         </div>"""
     else:
-        # ── English: image + translated overlays ──
+        # English: image + translated overlays
         overlays = ""
         blocks = page_data["text_blocks"]
         for i, block in enumerate(blocks):
             if i >= len(translated_texts):
                 break
+
             text = translated_texts[i]
-            escaped = (text.replace("&", "&amp;").replace("<", "&lt;")
-                          .replace(">", "&gt;").replace("\n", "<br>"))
+            escaped = html_lib.escape(text).replace("\n", "<br>")
             fs = max(block["font_size"] * 0.72, 7)
             fw = 600 if block["font_size"] > 13 else 400
+
+            # [FIX #2] Auto-expand width for English text
+            kr_chars = len(block["str"].replace("\n", ""))
+            en_chars = len(text.replace("\n", ""))
+            ratio = max(en_chars / max(kr_chars, 1), 1.0)
+            expanded_w = block["w_pct"] * max(ratio * 0.85, 1.05)
+            # Clamp: don't overflow past right edge (leave 3% margin)
+            max_w = 97 - block["x_pct"]
+            expanded_w = min(expanded_w, max_w)
 
             overlays += f"""
             <div style="position:absolute;
                 left:{block['x_pct']:.2f}%; top:{block['y_pct']:.2f}%;
-                width:{block['w_pct'] + 0.8:.2f}%; min-height:{block['h_pct']:.2f}%;
-                background:rgba(255,255,255,0.92);
+                width:{expanded_w:.2f}%; min-height:{block['h_pct']:.2f}%;
+                background:rgba(255,255,255,0.93);
                 border-left:2.5px solid #4F46E5;
-                padding:1px 5px 1px 4px;
-                font-size:clamp(6px, {fs * 0.11:.2f}vw, {fs * 1.1:.0f}px);
+                padding:2px 6px 2px 5px;
+                font-size:clamp(6px, {fs*0.11:.2f}vw, {fs*1.1:.0f}px);
                 font-weight:{fw};
-                line-height:1.28;
+                line-height:1.30;
                 font-family:'Inter','Noto Sans KR',sans-serif;
                 color:#111827;
                 white-space:pre-wrap;
-                word-break:keep-all;
-                overflow:hidden;
-                border-radius:1px;
+                word-break:break-word;
+                overflow-wrap:break-word;
+                border-radius:2px;
                 pointer-events:none;
             ">{escaped}</div>"""
 
         html = f"""
-        <div class="slide-container" style="position:relative; border-radius:6px;
-             overflow:hidden; border:1px solid #E8EBF0;
-             box-shadow: 0 1px 4px rgba(0,0,0,0.06);">
-            <img src="data:image/png;base64,{img_b64}"
+        <div style="position:relative; border-radius:6px; overflow:hidden;
+             border:1px solid #E8EBF0; box-shadow:0 1px 4px rgba(0,0,0,0.06);">
+            <img src="data:image/{img_fmt};base64,{img_b64}"
                  style="width:100%; display:block;" />
             {overlays}
         </div>"""
@@ -499,32 +473,36 @@ def render_viewer():
         <div class="sb-sub">Slide Translation Tool</div>
         """, unsafe_allow_html=True)
 
-        if st.session_state.file_name:
-            st.markdown(f'<div class="sb-file">{st.session_state.file_name}</div>', unsafe_allow_html=True)
+        safe_name = html_lib.escape(st.session_state.file_name)
+        if safe_name:
+            st.markdown(f'<div class="sb-file" title="{safe_name}">{safe_name}</div>',
+                        unsafe_allow_html=True)
 
         st.markdown(f'<div class="sb-count">📑 {total}개 슬라이드</div>', unsafe_allow_html=True)
-
         st.markdown('<div class="sb-label">Slides</div>', unsafe_allow_html=True)
 
+        # [FIX #5] Actual thumbnail images in sidebar
         for i in range(total):
             is_cur = i == cur
-            border = "2px solid #4F46E5" if is_cur else "1px solid #E8EBF0"
-            opacity = "1" if is_cur else "0.5"
-            shadow = "0 0 0 3px rgba(79,70,229,0.12)" if is_cur else "none"
+            bdr = "#4F46E5" if is_cur else "#E8EBF0"
+            bdr_w = "2px" if is_cur else "1px"
+            opa = "1" if is_cur else "0.5"
+            shd = "0 0 0 3px rgba(79,70,229,0.1)" if is_cur else "none"
 
-            thumb_html = f"""
-            <div style="border-radius:6px; overflow:hidden; border:{border};
-                 opacity:{opacity}; box-shadow:{shadow}; margin-bottom:8px;
-                 cursor:pointer; transition:all 0.15s; position:relative;">
-                <img src="data:image/png;base64,{pages[i]['thumb_b64']}"
+            st.markdown(f"""
+            <div style="border-radius:6px; overflow:hidden;
+                 border:{bdr_w} solid {bdr}; opacity:{opa};
+                 box-shadow:{shd}; margin-bottom:4px; position:relative;">
+                <img src="data:image/jpeg;base64,{pages[i]['thumb_b64']}"
                      style="width:100%; display:block;" />
                 <span style="position:absolute; bottom:3px; right:5px;
                       font-size:9px; font-weight:600; color:#fff;
-                      background:rgba(0,0,0,0.55); padding:1px 5px;
+                      background:rgba(0,0,0,0.5); padding:1px 5px;
                       border-radius:3px;">{i+1}</span>
             </div>
-            """
-            if st.button(f"　Slide {i+1}　", key=f"nav_{i}",
+            """, unsafe_allow_html=True)
+
+            if st.button(f"슬라이드 {i+1}", key=f"nav_{i}",
                          use_container_width=True,
                          type="primary" if is_cur else "secondary"):
                 st.session_state.current_page = i
@@ -536,7 +514,7 @@ def render_viewer():
                 del st.session_state[k]
             st.rerun()
 
-    # ── Header: Language toggle ──
+    # ── Header ──
     h1, h2, h3 = st.columns([4, 4, 3])
 
     with h1:
@@ -550,7 +528,6 @@ def render_viewer():
             if st.button("🇺🇸  English", use_container_width=True,
                          type="primary" if lang == "en" else "secondary"):
                 if not is_translated:
-                    # Translate ALL pages at once
                     st.session_state.translations = translate_all_pages(pages)
                     st.session_state.all_translated = True
                 st.session_state.lang = "en"
@@ -558,19 +535,22 @@ def render_viewer():
 
     with h2:
         if lang == "en" and is_translated:
-            st.markdown('<span class="status done">✓ 전체 번역 완료</span>', unsafe_allow_html=True)
+            st.markdown('<span class="status done">✓ 전체 번역 완료</span>',
+                        unsafe_allow_html=True)
         elif lang == "ko":
-            st.markdown(f'<span class="status info">원본 (한국어)</span>', unsafe_allow_html=True)
+            st.markdown('<span class="status info">원본 (한국어)</span>',
+                        unsafe_allow_html=True)
 
     with h3:
-        block_count = len(pages[cur]["text_blocks"])
-        st.markdown(f'<div style="text-align:right;"><span style="font-size:12px; color:#9CA3AF;">텍스트 블록: {block_count}개</span></div>', unsafe_allow_html=True)
+        bc = len(pages[cur]["text_blocks"])
+        st.markdown(
+            f'<div style="text-align:right;">'
+            f'<span style="font-size:12px;color:#9CA3AF;">텍스트 블록: {bc}개</span></div>',
+            unsafe_allow_html=True)
 
-    # ── Slide Display ──
-    page_data = pages[cur]
+    # ── Slide ──
     translated = st.session_state.translations.get(cur) if lang == "en" else None
-
-    render_slide(page_data, translated, lang)
+    render_slide(pages[cur], translated, lang)
 
     # ── Navigation ──
     n1, n2, n3, n4, n5 = st.columns([3, 1, 1, 1, 3])
@@ -579,7 +559,10 @@ def render_viewer():
             st.session_state.current_page = cur - 1
             st.rerun()
     with n3:
-        st.markdown(f'<div style="text-align:center; padding:8px 0; font-size:14px; color:#6B7280; font-weight:500;">{cur+1} / {total}</div>', unsafe_allow_html=True)
+        st.markdown(
+            f'<div style="text-align:center;padding:8px 0;font-size:14px;'
+            f'color:#6B7280;font-weight:500;">{cur+1} / {total}</div>',
+            unsafe_allow_html=True)
     with n4:
         if st.button("다음 ▶", disabled=(cur == total - 1), use_container_width=True):
             st.session_state.current_page = cur + 1
