@@ -5,6 +5,7 @@ import base64
 import json
 import io
 from datetime import datetime
+from PIL import Image
 
 # ──────────────────────────────────────────────
 # Config
@@ -20,6 +21,7 @@ RENDER_SCALE = 2.5
 THUMB_SCALE = 0.35
 JPEG_QUALITY = 90
 THUMB_QUALITY = 55
+AI_IMAGE_MAX_WIDTH = 1200  # px — readable but not too heavy for API
 
 STATUS_ICONS = {"unchecked": "⬜", "ok": "✅", "warn": "⚠️", "fix": "❌"}
 STATUS_LABELS = {"unchecked": "미확인", "ok": "OK", "warn": "확인 필요", "fix": "수정 필요"}
@@ -60,29 +62,22 @@ section[data-testid="stSidebar"] { background: #F7F8FA !important; border-right:
 .chip-fix { background:#FEF2F2;color:#991B1B;border:1px solid #FECACA; }
 .chip-unchecked { background:#F3F4F6;color:#6B7280;border:1px solid #E5E7EB; }
 
-/* Review result card */
-.rv-card {
-    border:1px solid #E8EBF0; border-radius:10px; margin-bottom:16px;
-    overflow:hidden; background:#fff;
-}
-.rv-header {
-    display:flex; align-items:center; justify-content:space-between;
-    padding:12px 16px; border-bottom:1px solid #F0F1F3; background:#F9FAFB;
-}
-.rv-page { font-size:14px; font-weight:600; color:#111827; }
-.rv-verdict { font-size:12px; font-weight:600; padding:3px 12px; border-radius:20px; }
+.rv-card { border:1px solid #E8EBF0;border-radius:10px;margin-bottom:16px;overflow:hidden;background:#fff; }
+.rv-header { display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid #F0F1F3;background:#F9FAFB; }
+.rv-page { font-size:14px;font-weight:600;color:#111827; }
+.rv-verdict { font-size:12px;font-weight:600;padding:3px 12px;border-radius:20px; }
 .rv-body { padding:14px 16px; }
-.rv-summary { font-size:13px; color:#374151; margin-bottom:10px; line-height:1.6; }
-.rv-issue { padding:8px 12px; margin:5px 0; border-radius:8px; font-size:12px; line-height:1.6; }
-.rv-issue.error { background:#FEF2F2; border-left:3px solid #EF4444; color:#991B1B; }
-.rv-issue.warn { background:#FFFBEB; border-left:3px solid #F59E0B; color:#92400E; }
-.rv-issue.info { background:#EFF6FF; border-left:3px solid #3B82F6; color:#1E40AF; }
-.rv-issue.ok { background:#F0FDF4; border-left:3px solid #22C55E; color:#166534; }
-.rv-note { font-size:12px; color:#6B7280; margin-top:8px; font-style:italic; }
-.rv-images { display:flex; gap:10px; margin-bottom:12px; }
-.rv-images > div { flex:1; min-width:0; }
-.rv-images img { width:100%; display:block; border-radius:4px; border:1px solid #E8EBF0; }
-.rv-img-label { font-size:10px; font-weight:600; text-align:center; padding:3px 0 5px; }
+.rv-summary { font-size:13px;color:#374151;margin-bottom:10px;line-height:1.6; }
+.rv-issue { padding:8px 12px;margin:5px 0;border-radius:8px;font-size:12px;line-height:1.6; }
+.rv-issue.error { background:#FEF2F2;border-left:3px solid #EF4444;color:#991B1B; }
+.rv-issue.warn { background:#FFFBEB;border-left:3px solid #F59E0B;color:#92400E; }
+.rv-issue.info { background:#EFF6FF;border-left:3px solid #3B82F6;color:#1E40AF; }
+.rv-issue.ok { background:#F0FDF4;border-left:3px solid #22C55E;color:#166534; }
+.rv-note { font-size:12px;color:#6B7280;margin-top:8px;font-style:italic; }
+.rv-images { display:flex;gap:10px;margin-bottom:12px; }
+.rv-images > div { flex:1;min-width:0; }
+.rv-images img { width:100%;display:block;border-radius:4px;border:1px solid #E8EBF0; }
+.rv-img-label { font-size:10px;font-weight:600;text-align:center;padding:3px 0 5px; }
 
 div[data-testid="stFileUploader"] > div { border:2px dashed #E5E7EB!important;border-radius:12px!important;background:#FAFBFC!important; }
 div[data-testid="stFileUploader"] > div:hover { border-color:#4F46E5!important;background:#F5F3FF!important; }
@@ -109,7 +104,6 @@ for k, v in {
 # PDF Processing
 # ──────────────────────────────────────────────
 def process_pdf(file_bytes, with_thumbs=False):
-    from PIL import Image
     doc = fitz.open(stream=file_bytes, filetype="pdf")
     pages = []
     aspect = 0.5625
@@ -117,11 +111,15 @@ def process_pdf(file_bytes, with_thumbs=False):
         page = doc[i]
         if i == 0:
             aspect = page.rect.height / page.rect.width
+
+        # Slide image (high-res for display)
         pix = page.get_pixmap(matrix=fitz.Matrix(RENDER_SCALE, RENDER_SCALE), alpha=False)
         img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
         buf = io.BytesIO()
         img.save(buf, format="JPEG", quality=JPEG_QUALITY, optimize=True)
         img_b64 = base64.b64encode(buf.getvalue()).decode()
+
+        # Thumbnail
         thumb_b64 = ""
         if with_thumbs:
             tpix = page.get_pixmap(matrix=fitz.Matrix(THUMB_SCALE, THUMB_SCALE), alpha=False)
@@ -129,70 +127,82 @@ def process_pdf(file_bytes, with_thumbs=False):
             tbuf = io.BytesIO()
             timg.save(tbuf, format="JPEG", quality=THUMB_QUALITY, optimize=True)
             thumb_b64 = base64.b64encode(tbuf.getvalue()).decode()
-        text = extract_page_text(page)
-        pages.append({"image_b64": img_b64, "thumb_b64": thumb_b64, "text": text})
+
+        pages.append({"image_b64": img_b64, "thumb_b64": thumb_b64})
     doc.close()
     return pages, aspect
 
 
-def extract_page_text(page):
-    blocks = page.get_text("dict")["blocks"]
-    lines = []
-    for block in blocks:
-        if block["type"] != 0:
-            continue
-        for line in block["lines"]:
-            parts = [s["text"].strip() for s in line["spans"] if s["text"].strip()]
-            if parts:
-                lines.append(" ".join(parts))
-    return "\n".join(lines)
+# ──────────────────────────────────────────────
+# Image Utils for AI Vision
+# ──────────────────────────────────────────────
+def resize_for_ai(img_b64, max_width=AI_IMAGE_MAX_WIDTH):
+    """Resize a JPEG base64 image for AI vision input. Returns base64."""
+    raw = base64.b64decode(img_b64)
+    img = Image.open(io.BytesIO(raw))
+    if img.width > max_width:
+        ratio = max_width / img.width
+        new_size = (max_width, int(img.height * ratio))
+        img = img.resize(new_size, Image.LANCZOS)
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=80)
+    return base64.b64encode(buf.getvalue()).decode()
 
 
 # ──────────────────────────────────────────────
-# AI Review
+# AI Review — Vision-based
 # ──────────────────────────────────────────────
 def has_api_key():
     return bool(st.secrets.get("ANTHROPIC_API_KEY", ""))
 
 
-def ai_review_page(client, ko_text, en_text, page_num):
-    response = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=2048,
-        system="""You are a QC reviewer for board of directors (이사회) meeting materials translation.
-Compare the Korean original with the English translation.
+REVIEW_SYSTEM = """You are a QC reviewer for board of directors (이사회) meeting materials.
+You will receive two slide images: the first is the Korean original, the second is the English translation.
+Compare them visually — every text, number, table cell, chart label, footnote.
 
-Check for:
+Check:
 1. Mistranslations or meaning changes
-2. Missing/added content
-3. Proper noun errors (company names, person names, abbreviations should be unchanged)
-4. Tone appropriateness for board-level communication
-5. Number/date accuracy
+2. Missing or added content (text present in one but absent in the other)
+3. Proper nouns / company names / abbreviations that should be unchanged
+4. Number and date accuracy (especially in tables and charts)
+5. Chart labels, axis labels, legends — are they all translated?
+6. Tone: formal enough for board-level communication?
+7. Layout issues: text overflow, cut-off text in the English version
 
 Return a JSON object:
 {
   "verdict": "ok" | "warn" | "fix",
   "summary": "한국어로 한줄 요약",
   "issues": [
-    {"level": "error"|"warn"|"info", "detail": "한국어로 구체적 설명"}
+    {"level": "error"|"warn"|"info", "detail": "한국어로 구체적 설명. 어디서 무엇이 문제인지 명확하게."}
   ]
 }
 
-- "ok": 문제 없음
+- "ok": 번역 정확, 이상 없음
 - "warn": 경미한 확인 필요 사항
-- "fix": 수정 필요한 오류
+- "fix": 반드시 수정해야 할 오류
 
-텍스트가 없는 슬라이드(이미지/차트만)는 "ok"로 처리.
-Return ONLY JSON. No markdown fences.""",
+텍스트가 거의 없는 슬라이드(표지, 구분 페이지 등)는 간단히 "ok" 처리.
+Return ONLY valid JSON. No markdown fences."""
+
+
+def ai_review_page(client, ko_img_b64, en_img_b64, page_num):
+    """Review a single slide using Claude Vision — compares actual images."""
+    # Resize for API efficiency
+    ko_small = resize_for_ai(ko_img_b64)
+    en_small = resize_for_ai(en_img_b64)
+
+    response = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=2048,
+        system=REVIEW_SYSTEM,
         messages=[{
             "role": "user",
-            "content": f"""슬라이드 {page_num}:
-
-[한국어]
-{ko_text if ko_text.strip() else "(텍스트 없음)"}
-
-[English]
-{en_text if en_text.strip() else "(No text)"}"""
+            "content": [
+                {"type": "text", "text": f"슬라이드 {page_num} 검토. 첫 번째 이미지가 한국어 원본, 두 번째가 영문 번역입니다."},
+                {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": ko_small}},
+                {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": en_small}},
+            ]
         }],
     )
     raw = response.content[0].text.strip().replace("```json", "").replace("```", "").strip()
@@ -203,12 +213,12 @@ def ai_review_all():
     client = anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
     reviews = {}
     total = st.session_state.num_pages
-    progress = st.progress(0, text="AI 검토 중...")
+    progress = st.progress(0, text="AI 검토 중 (이미지 비교)...")
     for i in range(total):
-        ko_text = st.session_state.pages_ko[i]["text"]
-        en_text = st.session_state.pages_en[i]["text"]
+        ko_img = st.session_state.pages_ko[i]["image_b64"]
+        en_img = st.session_state.pages_en[i]["image_b64"]
         try:
-            result = ai_review_page(client, ko_text, en_text, i + 1)
+            result = ai_review_page(client, ko_img, en_img, i + 1)
             reviews[i] = result
             st.session_state.page_status[i] = result.get("verdict", "unchecked")
         except Exception as e:
@@ -222,7 +232,6 @@ def ai_review_all():
 # Report Export
 # ──────────────────────────────────────────────
 def generate_report_csv():
-    """Generate CSV report of all QC results."""
     lines = ["슬라이드,상태,AI 판정,AI 요약,이슈 수,이슈 상세,메모"]
     for i in range(st.session_state.num_pages):
         status = STATUS_LABELS.get(st.session_state.page_status.get(i, "unchecked"), "미확인")
@@ -237,6 +246,72 @@ def generate_report_csv():
         note = st.session_state.page_notes.get(i, "").replace(",", ";").replace("\n", " ")
         lines.append(f"{i+1},{status},{verdict},{summary},{issue_count},{issue_details},{note}")
     return "\n".join(lines)
+
+
+def generate_report_txt():
+    """Plain text report — copy-paste friendly for practical use."""
+    total = st.session_state.num_pages
+    divider = "─" * 50
+    header = "═" * 50
+
+    out = []
+    out.append(header)
+    out.append("  BOD Slide QC Report")
+    out.append(f"  {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    out.append(header)
+
+    # Summary
+    counts = {}
+    for i in range(total):
+        v = st.session_state.page_status.get(i, "unchecked")
+        counts[v] = counts.get(v, 0) + 1
+    out.append("")
+    out.append(f"  전체: {total}장")
+    for key in ["fix", "warn", "ok", "unchecked"]:
+        c = counts.get(key, 0)
+        if c > 0:
+            out.append(f"  {STATUS_ICONS[key]} {STATUS_LABELS[key]}: {c}장")
+    out.append("")
+
+    # Per-page details
+    for i in range(total):
+        status = st.session_state.page_status.get(i, "unchecked")
+        review = st.session_state.ai_reviews.get(i, {})
+        verdict = review.get("verdict", "unchecked")
+        summary = review.get("summary", "")
+        issues = review.get("issues", [])
+        note = st.session_state.page_notes.get(i, "")
+
+        icon = STATUS_ICONS.get(status, "⬜")
+        label = STATUS_LABELS.get(status, "미확인")
+
+        out.append(divider)
+        out.append(f"  슬라이드 {i+1}  {icon} {label}")
+        out.append(divider)
+
+        if summary:
+            out.append(f"  AI 요약: {summary}")
+
+        if issues:
+            out.append("  이슈:")
+            for iss in issues:
+                level = iss.get("level", "info")
+                detail = iss.get("detail", "")
+                level_icon = {"error": "🔴", "warn": "🟡", "info": "🔵"}.get(level, "ℹ️")
+                out.append(f"    {level_icon} {detail}")
+        elif verdict == "ok":
+            out.append("  이슈: 없음 ✅")
+
+        if note:
+            out.append(f"  메모: {note}")
+
+        out.append("")
+
+    out.append(header)
+    out.append("  END OF REPORT")
+    out.append(header)
+
+    return "\n".join(out)
 
 
 # ──────────────────────────────────────────────
@@ -267,21 +342,18 @@ def render_single(idx, lang):
 
 
 def render_review_results():
-    """Scrollable view of ALL review results with mini slide previews."""
     total = st.session_state.num_pages
     reviews = st.session_state.ai_reviews
-    has_reviews = len(reviews) > 0
 
-    if not has_reviews:
-        st.info("🤖 '전체 AI 검토' 버튼을 눌러 검토를 시작하세요.")
+    if not reviews:
+        st.info("🤖 '전체 AI 검토' 버튼을 눌러 검토를 시작하세요. AI가 각 슬라이드 이미지를 직접 보고 한/영을 비교합니다.")
         return
 
-    # Summary stats
+    # Summary
     counts = {}
     for i in range(total):
         v = st.session_state.page_status.get(i, "unchecked")
         counts[v] = counts.get(v, 0) + 1
-
     chips = ""
     for key in ["fix", "warn", "ok", "unchecked"]:
         c = counts.get(key, 0)
@@ -296,7 +368,6 @@ def render_review_results():
     filter_map = {"전체": None, "❌ 수정 필요": "fix", "⚠️ 확인 필요": "warn", "✅ OK": "ok"}
     active_filter = filter_map[filter_opt]
 
-    # Cards
     for i in range(total):
         status = st.session_state.page_status.get(i, "unchecked")
         if active_filter and status != active_filter:
@@ -307,12 +378,10 @@ def render_review_results():
         summary = review.get("summary", "검토 결과 없음")
         issues = review.get("issues", [])
         note = st.session_state.page_notes.get(i, "")
-
         bg, fg, bd = STATUS_COLORS.get(verdict, STATUS_COLORS["unchecked"])
         v_label = STATUS_LABELS.get(verdict, "미확인")
         v_icon = STATUS_ICONS.get(verdict, "⬜")
 
-        # Build issues HTML
         issues_html = ""
         for iss in issues:
             level = iss.get("level", "info")
@@ -320,23 +389,21 @@ def render_review_results():
             css = {"error": "error", "warn": "warn", "info": "info"}.get(level, "info")
             icon = {"error": "🔴", "warn": "🟡", "info": "🔵"}.get(level, "ℹ️")
             issues_html += f'<div class="rv-issue {css}">{icon} {detail}</div>'
-
         if not issues and verdict == "ok":
             issues_html = '<div class="rv-issue ok">✅ 번역이 정확합니다.</div>'
 
         note_html = f'<div class="rv-note">📝 {note}</div>' if note else ""
 
-        # Mini slide previews
         ko_thumb = st.session_state.pages_ko[i].get("thumb_b64", "")
-        en_thumb = st.session_state.pages_en[i].get("thumb_b64", st.session_state.pages_en[i].get("image_b64", ""))
+        en_thumb = st.session_state.pages_en[i].get("thumb_b64", "")
+        # EN doesn't have thumbs — use a resized version
+        if not en_thumb:
+            en_thumb = resize_for_ai(st.session_state.pages_en[i]["image_b64"], 300)
 
-        # Use thumbnails for KO, but EN doesn't have thumbs — use small version
-        images_html = ""
-        if ko_thumb:
-            images_html = f'''<div class="rv-images">
-                <div><div class="rv-img-label" style="color:#374151;">🇰🇷 한국어</div><img src="data:image/jpeg;base64,{ko_thumb}"/></div>
-                <div><div class="rv-img-label" style="color:#4F46E5;">🇺🇸 English</div><img src="data:image/jpeg;base64,{en_thumb}"/></div>
-            </div>'''
+        images_html = f'''<div class="rv-images">
+            <div><div class="rv-img-label" style="color:#374151;">🇰🇷</div><img src="data:image/jpeg;base64,{ko_thumb}"/></div>
+            <div><div class="rv-img-label" style="color:#4F46E5;">🇺🇸</div><img src="data:image/jpeg;base64,{en_thumb}"/></div>
+        </div>''' if ko_thumb else ""
 
         st.markdown(f'''
         <div class="rv-card">
@@ -352,7 +419,6 @@ def render_review_results():
             </div>
         </div>''', unsafe_allow_html=True)
 
-        # Inline note input
         new_note = st.text_input(f"📝 슬라이드 {i+1} 메모", value=note, key=f"note_{i}",
                                   placeholder="메모 입력...", label_visibility="collapsed")
         if new_note != note:
@@ -360,7 +426,7 @@ def render_review_results():
 
 
 # ──────────────────────────────────────────────
-# Status Controls (for slide view modes)
+# Status Controls
 # ──────────────────────────────────────────────
 def render_status_controls(idx):
     status = st.session_state.page_status.get(idx, "unchecked")
@@ -394,14 +460,11 @@ def render_status_controls(idx):
         if new_note != note:
             st.session_state.page_notes[idx] = new_note
 
-    # Show AI review if exists
     if review:
         summary = review.get("summary", "")
         issues = review.get("issues", [])
         v = review.get("verdict", "")
-        v_icon = STATUS_ICONS.get(v, "")
-
-        st.markdown(f"**🤖 AI 검토:** {v_icon} {summary}")
+        st.markdown(f"**🤖 AI 검토:** {STATUS_ICONS.get(v, '')} {summary}")
         for iss in issues:
             level = iss.get("level", "info")
             detail = iss.get("detail", "")
@@ -418,7 +481,7 @@ def render_upload():
     <div class="upload-screen">
         <h1>🔍 BOD Slide QC</h1>
         <p>이사회 자료의 한국어·영문 PDF를 나란히 비교하고<br>
-        AI가 번역 적절성을 자동으로 검토합니다.</p>
+        AI가 슬라이드 이미지를 직접 보고 번역 적절성을 검토합니다.</p>
     </div>""", unsafe_allow_html=True)
 
     u1, u2 = st.columns(2, gap="large")
@@ -469,8 +532,6 @@ def render_viewer():
     # ── Sidebar ──
     with st.sidebar:
         st.markdown('<div class="sb-brand">BOD SLIDE QC</div><div class="sb-sub">Translation Review Tool</div>', unsafe_allow_html=True)
-
-        # Status summary chips
         counts = {}
         for s in st.session_state.page_status.values():
             counts[s] = counts.get(s, 0) + 1
@@ -484,7 +545,6 @@ def render_viewer():
             st.markdown(f'<div class="status-row">{chips}</div>', unsafe_allow_html=True)
 
         st.markdown('<div class="sb-label" style="margin-top:12px;">Slides</div>', unsafe_allow_html=True)
-
         for i in range(total):
             is_cur = i == cur and mode != "review"
             status = st.session_state.page_status.get(i, "unchecked")
@@ -499,8 +559,7 @@ def render_viewer():
             if st.button(f"{icon} 슬라이드 {i+1}", key=f"nav_{i}", use_container_width=True,
                          type="primary" if is_cur else "secondary"):
                 st.session_state.current_page = i
-                if mode == "review":
-                    st.session_state.view_mode = "compare"
+                if mode == "review": st.session_state.view_mode = "compare"
                 st.rerun()
 
         st.divider()
@@ -536,25 +595,27 @@ def render_viewer():
                     st.rerun()
 
     with h2:
-        # Report download
         if st.session_state.ai_reviews:
-            csv = generate_report_csv()
-            st.download_button("📥 QC 리포트 다운로드", csv,
-                               file_name=f"BOD_QC_Report_{datetime.now().strftime('%Y%m%d')}.csv",
-                               mime="text/csv", use_container_width=True)
+            dl1, dl2 = st.columns(2)
+            with dl1:
+                txt = generate_report_txt()
+                st.download_button("📝 TXT 리포트", txt,
+                                   file_name=f"BOD_QC_{datetime.now().strftime('%Y%m%d')}.txt",
+                                   mime="text/plain", use_container_width=True)
+            with dl2:
+                csv = generate_report_csv()
+                st.download_button("📊 CSV 리포트", csv,
+                                   file_name=f"BOD_QC_{datetime.now().strftime('%Y%m%d')}.csv",
+                                   mime="text/csv", use_container_width=True)
 
     # ── Content ──
     if mode == "review":
         render_review_results()
     else:
-        if mode == "compare":
-            render_compare(cur)
-        else:
-            render_single(cur, mode)
-
+        if mode == "compare": render_compare(cur)
+        else: render_single(cur, mode)
         render_status_controls(cur)
 
-        # Navigation
         st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
         n1, n2, n3, n4, n5 = st.columns([3, 1, 1, 1, 3])
         with n2:
@@ -567,8 +628,6 @@ def render_viewer():
                 st.session_state.current_page = cur + 1; st.rerun()
 
 
-# ──────────────────────────────────────────────
-# Main
 # ──────────────────────────────────────────────
 if not st.session_state.get("processed"):
     render_upload()
